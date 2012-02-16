@@ -10,11 +10,12 @@ memory optimization, I can store the keys in a Redis hash and use a
 pipelined request to fetch multiple keys. Redis stores 1 million keys
 in 100 MB.
 
-However, I was curious to see how far I could push Erlang in solving
-this problem. For now the system will answer around 1000 concurrent
-requests, where each request will look up 200 keys on average and 1000
-keys in the worst case. The cache will be updated a few hundred times
-per second. A shared memory architecture would be perfect for this.
+However, I was curious to see if I could improve on this setup. For
+now the system will answer around 1000 concurrent requests, where each
+request will look up 200 keys on average and 1000 keys in the worst
+case. The cache will be updated a few hundred times per second. A
+shared memory architecture would be the perfect tool for this task,
+but I wanted to see how far I could push Erlang.
 
 At first I tried using ETS, but some quick math showed that it would
 not be feasible as the memory usage was too high (6 words + size of

@@ -1,0 +1,12 @@
+{application, bisect,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { bisect_app, []}},
+  {env, []}
+ ]}.

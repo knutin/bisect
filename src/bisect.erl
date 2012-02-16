@@ -15,7 +15,7 @@
 -author('Knut Nesheim <knutin@gmail.com>').
 
 -export([new/2, insert/3, find/2, update/3]).
--export([serialize/1, deserialize/1, from_orddict/2]).
+-export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
 -compile({no_auto_import, [size/1]}).
@@ -151,6 +151,10 @@ find(B, K) ->
         _ ->
             not_found
     end.
+
+-spec find_many(bindict(), [key()]) -> [value() | not_found].
+find_many(B, Keys) ->
+    lists:map(fun (K) -> find(B, K) end, Keys).
 
 
 
@@ -329,11 +333,5 @@ insert_many(Bin, Pairs) ->
                     ({K, V}, B) ->
                         insert(B, K, V)
                 end, Bin, Pairs).
-
-find_many(B, Keys) ->
-    lists:map(fun (K) ->
-                      {K, find(B, K)}
-              end, Keys).
-
 
 -endif.

@@ -1,171 +1,320 @@
+%% @doc: Space-efficient dictionary implemented using a binary
+%%
+%% This module implements a space-efficient dictionary with no
+%% overhead per entry. Read and write access is O(log n).
+%%
+%% Keys and values are fixed size binaries stored ordered in a larger
+%% binary which acts as a sparse array. All operations are implemented
+%% using a binary search.
+%%
+%% As large binaries can be shared among processes, there can be
+%% multiple concurrent readers of an instance of this structure.
+%%
+%% serialize/1 and deserialize/1
 -module(bisect).
--compile([export_all]).
+-author('Knut Nesheim <knutin@gmail.com>').
 
+-export([new/2, insert/3, find/2, update/3]).
+-export([serialize/1, deserialize/1, from_orddict/2]).
+-export([expected_size/2, expected_size_mb/2, num_keys/1]).
+
+-compile({no_auto_import, [size/1]}).
+
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
-
--define(i2k(I), <<I:64/integer>>).
--define(i2v(I), <<I:8/integer>>).
--define(b2i(B), list_to_integer(binary_to_list(B))).
+-endif.
 
 
-
-new() ->
-    <<>>.
-%%     new(8, 1, 10).
-
-%% new(KeySize, ValueSize, NumKeys) ->
-%%     binary:copy(<<0:((KeySize+ValueSize) * 8)>>, NumKeys).
+%%
+%% TYPES
+%%
 
 
+-type key_size()   :: pos_integer().
+-type value_size() :: pos_integer().
+-type block_size() :: pos_integer().
+
+-type key()        :: binary().
+-type value()      :: binary().
+
+-type index()      :: pos_integer().
+
+-record(bindict, {
+          key_size   :: key_size(),
+          value_size :: value_size(),
+          block_size :: block_size(),
+          b          :: binary()
+}).
+-type bindict() :: #bindict{}.
+
+
+%%
+%% API
+%%
+
+-spec new(key_size(), value_size()) -> bindict().
+%% @doc: Returns a new empty dictionary where where the keys and
+%% values will always be of the given size.
+new(KeySize, ValueSize) ->
+    #bindict{key_size = KeySize,
+             value_size = ValueSize,
+             block_size = KeySize + ValueSize,
+             b = <<>>}.
+
+
+%% @doc: Uses binary search to find the index of the given key. If the
+%% key does not exist, the index where it should be inserted is
+%% returned.
+-spec index(bindict(), key()) -> index().
 index(<<>>, _) ->
     0;
 index(B, K) ->
-    index(B, 0, size(B) div 9, K).
+    N = byte_size(B#bindict.b) div B#bindict.block_size,
+    index(B, 0, N, K).
+
+index(_B, Low, High, _K) when High =:= Low ->
+    Low;
 
 index(_B, Low, High, _K) when High < Low ->
-    0;
+    -1;
 
 index(B, Low, High, K) ->
     Mid = (Low + High) div 2,
-%%     io:format("k: ~p, low: ~p, mid: ~p, high: ~p, size: ~p~n",
-%%               [K, Low, Mid, High, size(B) div 9]),
-%%     io:format("b: ~p~n", [B]),
+    MidOffset = index2offset(B, Mid),
 
-    MidIndex = Mid * 9,
-
-    case size(B) div 9 > Mid of
+    KeySize = B#bindict.key_size,
+    case byte_size(B#bindict.b) > MidOffset of
         true ->
-            <<_:MidIndex/binary, MidKey:8/binary, _/binary>> = B,
+            <<_:MidOffset/binary, MidKey:KeySize/binary, _/binary>> = B#bindict.b,
 
             if
                 MidKey > K ->
-                    index(B, Low, Mid - 1, K);
+                    index(B, Low, Mid, K);
                 MidKey < K ->
                     index(B, Mid + 1, High, K);
-                true ->
-                    Mid+1
+                MidKey =:= K ->
+                    Mid
             end;
         false ->
             Mid
     end.
 
 
+-spec insert(bindict(), key(), value()) -> bindict().
+%% @doc: Inserts the key and value into the dictionary. If the size of
+%% key and value is wrong, throws badarg.
+insert(B, K, V) when byte_size(K) =/= B#bindict.key_size orelse
+                     byte_size(V) =/= B#bindict.value_size ->
+    erlang:error(badarg);
 
-insert(<<>>, K, V) ->
-    <<K/binary, V/binary>>;
+insert(#bindict{b = <<>>} = B, K, V) ->
+    B#bindict{b = <<K/binary, V/binary>>};
 
 insert(B, K, V) ->
-    Index = index(B, K) * 9,
-    RightIndex = size(B),
+    Index = index(B, K),
+    LeftOffset = Index * B#bindict.block_size,
+    RightOffset = byte_size(B#bindict.b) - LeftOffset,
 
-    case B of
-        <<Left:Index/binary>> ->
-            <<Left/binary, K/binary, V/binary>>;
-        <<Left:Index/binary, Right:RightIndex/binary>> ->
-            <<Left/binary, K/binary, V/binary, Right/binary>>
+    case B#bindict.b of
+        <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
+            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
+    end.
+
+-spec update(bindict(), key(), value()) -> bindict().
+%% @doc: Replaces the existing key with the new value, crashes if the
+%% key is not already present.
+update(B, K, V) ->
+    Index = index(B, K),
+    LeftOffset = Index * B#bindict.block_size,
+
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+
+    case B#bindict.b of
+        <<Left:LeftOffset/binary, K:KeySize/binary, _:ValueSize/binary, Right/binary>> ->
+            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>};
+        _ ->
+            erlang:error(badarg)
     end.
 
 
+-spec find(bindict(), key()) -> value() | not_found.
+%% @doc: Returns the value associated with the key or 'not_found' if
+%% there is no such key.
 find(B, K) ->
-    Index = (index(B, K) * 9) - 9,
-    case B of
-        <<_:Index/binary, K:8/binary, Value:1/binary, _/binary>> ->
+    Offset = index2offset(B, index(B, K)),
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    case B#bindict.b of
+        <<_:Offset/binary, K:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
             Value;
         _ ->
             not_found
     end.
 
 
-from_orddict(Orddict) ->
-    lists:foldl(fun ({K, V}, B) ->
-                        <<B/binary, K:64/integer, V:8/integer>>
-                end, new(), orddict:to_list(Orddict)).
 
+%% @doc: Returns how many bytes would be used by the structure if it
+%% was storing NumKeys.
+expected_size(B, NumKeys) ->
+    B#bindict.block_size * NumKeys.
+
+expected_size_mb(B, NumKeys) ->
+    expected_size(B, NumKeys) / 1024 / 1024.
+
+-spec num_keys(bindict()) -> integer().
+%% @doc: Returns the number of keys in the dictionary
+num_keys(B) ->
+    byte_size(B#bindict.b) div B#bindict.block_size.
+
+
+-spec serialize(bindict()) -> binary().
+%% @doc: Returns a binary representation of the dictionary which can
+%% be deserialized later to recreate the same structure.
+serialize(#bindict{} = B) ->
+    term_to_binary(B).
+
+-spec deserialize(binary()) -> bindict().
+deserialize(Bin) ->
+    case binary_to_term(Bin) of
+        #bindict{} = B ->
+            B;
+        _ ->
+            erlang:error(badarg)
+    end.
+
+
+%% @doc: Populates the dictionary with data from the orddict, taking
+%% advantage of the fact that it is already ordered. The given bindict
+%% must be empty, but contain size parameters.
+from_orddict(#bindict{b = <<>>} = B, Orddict) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    NewB = lists:foldl(fun ({K, V}, Bin) when byte_size(K) =:= B#bindict.key_size andalso
+                                              byte_size(V) =:= B#bindict.value_size ->
+                               <<Bin/binary, K:KeySize/binary, V:ValueSize/binary>>;
+                           (_, _) ->
+                               erlang:error(badarg)
+                       end, B#bindict.b, orddict:to_list(Orddict)),
+    B#bindict{b = NewB}.
+
+
+%%
+%% INTERNAL HELPERS
+%%
+
+index2offset(_, 0) -> 0;
+index2offset(B, I) -> I * B#bindict.block_size.
 
 
 %%
 %% TEST
 %%
+-ifdef(TEST).
+
+
+-define(i2k(I), <<I:64/integer>>).
+-define(i2v(I), <<I:8/integer>>).
+-define(b2i(B), list_to_integer(binary_to_list(B))).
 
 insert_test() ->
-    insert_many(new(), [{2, 2}, {3, 3}, {1, 1}]).
+    insert_many(new(8, 1), [{2, 2}, {4, 4}, {1, 1}, {3, 3}]).
+
+sorted_insert_test() ->
+    B = insert_many(new(8, 1), [{1, 1}, {2, 2}, {3, 3}, {4, 4}]),
+    ?assertEqual(<<1:64/integer, 1, 2:64/integer, 2,
+                   3:64/integer, 3, 4:64/integer, 4>>, B#bindict.b).
+
+index_test() ->
+    B = #bindict{key_size = 8, value_size = 1, block_size = 9,
+           b = <<0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,2,2>>},
+    ?assertEqual(0, index(B, <<1:64/integer>>)),
+    ?assertEqual(1, index(B, <<2:64/integer>>)),
+    ?assertEqual(2, index(B, <<3:64/integer>>)),
+    ?assertEqual(2, index(B, <<100:64/integer>>)).
 
 find_test() ->
-    B = insert_many(new(), [{2, 2}, {3, 3}, {1, 1}]),
+    B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
     ?assertEqual(<<3:8/integer>>, find(B, <<3:64/integer>>)).
 
-
 find_non_existing_test() ->
-    B = insert_many(new(), [{2, 2}, {3, 3}, {1, 1}]),
+    B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
     ?assertEqual(not_found, find(B, ?i2k(4))).
 
-simple_index_test() ->
-    B = <<12398:64/integer, 255>>,
-    ?assertEqual(1, index(B, <<12398:64/integer>>)).
-
 find_many_test() ->
-    B = insert_many(new(), [{2, 2}, {3, 3}, {1, 1}]),
+    B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
     find_many(B, [<<1:64/integer>>, <<2:64/integer>>, <<3:64/integer>>]).
 
+update_test() ->
+    B = insert_many(new(8, 1), [{2, 2}]),
+    ?assertEqual(<<2>>, find(B, <<2:64/integer>>)),
+    B2 = update(B, <<2:64/integer>>, <<4>>),
+    ?assertEqual(<<4>>, find(B2, <<2:64/integer>>)).
 
-
+update_non_existing_test() ->
+    B = insert_many(new(8, 1), [{2, 2}]),
+    ?assertError(badarg, update(B, <<3:64/integer>>, <<4>>)).
 
 
 size_test() ->
     Start = 100000000000000,
-    N = 100000,
+    N = 1000,
     Spread = 1,
     KeyPairs = lists:map(fun (I) -> {I, 255} end,
                          lists:seq(Start, Start+(N*Spread), Spread)),
 
-    B = from_orddict(KeyPairs),
+    B = insert_many(new(8, 1), KeyPairs),
+    ?assertEqual(N+Spread, num_keys(B)).
 
-    error_logger:info_msg("~p keys in ~p mb~n",
-                          [N, byte_size(B) / 1024 / 1024]).
+serialize_test() ->
+    KeyPairs = lists:map(fun (I) -> {I, 255} end, lists:seq(1, 100)),
+    B = insert_many(new(8, 1), KeyPairs),
+    ?assertEqual(B, deserialize(serialize(B))).
+
+from_orddict_test() ->
+    Orddict = orddict:from_list([{<<1:64/integer>>, <<255:8/integer>>}]),
+    ?assertEqual(<<255>>, find(from_orddict(new(8, 1), Orddict), <<1:64/integer>>)).
 
 
-from_file(File) ->
-    {ok, Terms} = file:read_file(File),
-    KeyPairs = lists:map(fun (K) -> {?b2i(K), 255} end,
-                         binary_to_term(Terms)),
-    {ReadKeys, _} = lists:unzip(lists:sublist(KeyPairs, 1000)),
+speed_test_() ->
+    {timeout, 600,
+     fun() ->
+             Start = 100000000000000,
+             N = 10000,
+             Keys = lists:seq(Start, Start+N),
+             KeyValuePairs = lists:map(fun (I) -> {<<I:64/integer>>, <<255:8/integer>>} end,
+                                       Keys),
 
-    B = from_orddict(lists:sort(KeyPairs)),
-    io:format("size: ~p mb~n", [byte_size(B) / 1024 / 1024]),
-    time_reads(B, length(KeyPairs), ReadKeys).
-
-speed_test() ->
-    Start = 100000000000000,
-    N = 1000000,
-    Spread = 1,
-    KeyPairs = lists:map(fun (I) -> {I, 255} end,
-                         lists:seq(Start, Start+(N*Spread), Spread)),
-
-    ReadKeys = [random:uniform(Start) + Start || _ <- lists:seq(1, 1000)],
-
-    B = from_orddict(KeyPairs),
-    time_reads(B, N, ReadKeys).
+             %% Will mostly be unique, if N is bigger than 10000
+             ReadKeys = [lists:nth(random:uniform(N), Keys) || _ <- lists:seq(1, 1000)],
+             B = from_orddict(new(8, 1), KeyValuePairs),
+             time_reads(B, N, ReadKeys)
+     end}.
 
 
 time_reads(B, Size, ReadKeys) ->
     Parent = self(),
     spawn(
       fun() ->
+              Runs = 20,
               Timings =
                   lists:map(
                     fun (_) ->
                             StartTime = now(),
                             find_many(B, ReadKeys),
                             timer:now_diff(now(), StartTime)
-                    end, lists:seq(1, 20)),
+                    end, lists:seq(1, Runs)),
 
               Rps = 1000000 / ((lists:sum(Timings) / length(Timings)) / 1000),
-              error_logger:info_msg("20 runs, ~p keys, "
-                                    "average: ~p us, "
-                                    "max: ~p us, rps ~.2f~n",
-                                    [Size,
+              error_logger:info_msg("Average over ~p runs, ~p keys in dict~n"
+                                    "Average fetch ~p keys: ~p us, max: ~p us~n"
+                                    "Average fetch 1 key: ~p us~n"
+                                    "Theoretical sequential RPS: ~w~n",
+                                    [Runs, Size, length(ReadKeys),
                                      lists:sum(Timings) / length(Timings),
-                                     lists:max(Timings), Rps]),
+                                     lists:max(Timings),
+                                     (lists:sum(Timings) / length(Timings)) / length(ReadKeys),
+                                     trunc(Rps)]),
 
               Parent ! done
       end),
@@ -185,3 +334,6 @@ find_many(B, Keys) ->
     lists:map(fun (K) ->
                       {K, find(B, K)}
               end, Keys).
+
+
+-endif.

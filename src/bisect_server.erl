@@ -3,7 +3,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/2, start_link/3, get/2, mget/2, insert/3, inject/2]).
+-export([start_link/2, start_link/3, get/2, mget/2, mget_serial/2,
+         insert/3, inject/2, num_keys/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -30,6 +31,13 @@ mget(Pid, Keys) ->
     {ok, B} = gen_server:call(Pid, get_b),
     {ok, bisect:find_many(B, Keys)}.
 
+mget_serial(Pid, Keys) ->
+    gen_server:call(Pid, {mget, Keys}).
+
+num_keys(Pid) ->
+    {ok, B} = gen_server:call(Pid, get_b),
+    {ok, bisect:num_keys(B)}.
+
 insert(Pid, K, V) ->
     gen_server:call(Pid, {insert, K, V}).
 
@@ -50,7 +58,10 @@ handle_call({insert, K, V}, _From, #state{b = B} = State) ->
     {reply, ok, State#state{b = bisect:insert(B, K, V)}};
 
 handle_call({inject, B}, _From, State) ->
-    {reply, ok, State#state{b = B}}.
+    {reply, ok, State#state{b = B}};
+
+handle_call({mget, Keys}, _From, State) ->
+    {reply, {ok, bisect:find_many(State#state.b, Keys)}, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -80,7 +91,8 @@ insert_test() ->
 
     Keys = [<<1:64/integer>>, <<2:64/integer>>, <<3:64/integer>>],
     Values = [<<1>>, <<2>>, <<3>>],
-    ?assertEqual({ok, Values}, mget(S, Keys)).
+    ?assertEqual({ok, Values}, mget(S, Keys)),
+    ?assertEqual({ok, Values}, mget_serial(S, Keys)).
 
 
 inject_test() ->
@@ -94,5 +106,6 @@ inject_test() ->
     ?assertEqual({ok, not_found}, get(S, Key)),
     ok = inject(S, B),
     ?assertEqual({ok, <<255>>}, get(S, Key)).
+
 
 -endif.

@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, insert/3, find/2, update/3, delete/2, compact/1]).
+-export([new/2, insert/3, find/2, delete/2, compact/1]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -64,7 +64,8 @@ new(KeySize, ValueSize) when is_integer(KeySize) andalso is_integer(ValueSize) -
 
 -spec insert(bindict(), key(), value()) -> bindict().
 %% @doc: Inserts the key and value into the dictionary. If the size of
-%% key and value is wrong, throws badarg.
+%% key and value is wrong, throws badarg. If the key is already in the
+%% array, the value is updated.
 insert(B, K, V) when byte_size(K) =/= B#bindict.key_size orelse
                      byte_size(V) =/= B#bindict.value_size ->
     erlang:error(badarg);
@@ -77,26 +78,15 @@ insert(B, K, V) ->
     LeftOffset = Index * B#bindict.block_size,
     RightOffset = byte_size(B#bindict.b) - LeftOffset,
 
-    case B#bindict.b of
-        <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
-            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
-    end.
-
--spec update(bindict(), key(), value()) -> bindict().
-%% @doc: Replaces the existing key with the new value, crashes if the
-%% key is not already present.
-update(B, K, V) ->
-    Index = index(B, K),
-    LeftOffset = Index * B#bindict.block_size,
-
     KeySize = B#bindict.key_size,
     ValueSize = B#bindict.value_size,
 
     case B#bindict.b of
         <<Left:LeftOffset/binary, K:KeySize/binary, _:ValueSize/binary, Right/binary>> ->
             B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>};
-        _ ->
-            erlang:error(badarg)
+
+        <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
+            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
     end.
 
 
@@ -266,15 +256,11 @@ find_many_test() ->
     B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
     find_many(B, [<<1:64/integer>>, <<2:64/integer>>, <<3:64/integer>>]).
 
-update_test() ->
+insert_overwrite_test() ->
     B = insert_many(new(8, 1), [{2, 2}]),
     ?assertEqual(<<2>>, find(B, <<2:64/integer>>)),
-    B2 = update(B, <<2:64/integer>>, <<4>>),
+    B2 = insert(B, <<2:64/integer>>, <<4>>),
     ?assertEqual(<<4>>, find(B2, <<2:64/integer>>)).
-
-update_non_existing_test() ->
-    B = insert_many(new(8, 1), [{2, 2}]),
-    ?assertError(badarg, update(B, <<3:64/integer>>, <<4>>)).
 
 
 delete_test() ->
@@ -283,6 +269,11 @@ delete_test() ->
 
     NewB = delete(B, ?i2k(2)),
     ?assertEqual(not_found, find(NewB, ?i2k(2))).
+
+delete_non_existing_test() ->
+    B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
+    ?assertError(badarg, delete(B, ?i2k(4))).
+
 
 size_test() ->
     Start = 100000000000000,
@@ -308,7 +299,7 @@ speed_test_() ->
     {timeout, 600,
      fun() ->
              Start = 100000000000000,
-             N = 25000,
+             N = 10000,
              Keys = lists:seq(Start, Start+N),
              KeyValuePairs = lists:map(fun (I) -> {<<I:64/integer>>, <<255:8/integer>>} end,
                                        Keys),
@@ -324,7 +315,7 @@ insert_speed_test_() ->
     {timeout, 600,
      fun() ->
              Start = 100000000000000,
-             N = 50000,
+             N = 10000,
              Keys = lists:seq(Start, Start+N),
              KeyValuePairs = lists:map(fun (I) -> {<<I:64/integer>>, <<255:8/integer>>} end,
                                        Keys),

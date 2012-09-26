@@ -70,8 +70,8 @@ insert(B, K, V) when byte_size(K) =/= B#bindict.key_size orelse
                      byte_size(V) =/= B#bindict.value_size ->
     erlang:error(badarg);
 
-insert(#bindict{b = <<>>} = B, K, V) ->
-    B#bindict{b = <<K/binary, V/binary>>};
+%% insert(#bindict{b = <<>>} = B, K, V) ->
+%%     B#bindict{b = <<K/binary, V/binary>>};
 
 insert(B, K, V) ->
     Index = index(B, K),
@@ -81,13 +81,14 @@ insert(B, K, V) ->
     KeySize = B#bindict.key_size,
     ValueSize = B#bindict.value_size,
 
-    case B#bindict.b of
-        <<Left:LeftOffset/binary, K:KeySize/binary, _:ValueSize/binary, Right/binary>> ->
-            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>};
+    %% case B#bindict.b of
+    %%     <<Left:LeftOffset/binary, K:KeySize/binary, _:ValueSize/binary, Right/binary>> ->
+    %%         B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>};
 
-        <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
-            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
-    end.
+    %%     <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
+    %%         B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
+    %% end.
+    B.
 
 
 -spec find(bindict(), key()) -> value() | not_found.

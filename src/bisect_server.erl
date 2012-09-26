@@ -16,11 +16,10 @@
 
 -record(state, {b}).
 
--ifdef(TEST).
 -include_lib("proper/include/proper.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -compile([export_all]).
--endif.
+
 
 %%%===================================================================
 %%% API
@@ -107,32 +106,182 @@ code_change(_OldVsn, State, _Extra) ->
 %% TESTS
 %%
 
--ifdef(TEST).
+%% skeleton
+
+-ifdef(false).
+
+proper_test() ->
+    ?assert(proper:quickcheck(?MODULE:prop_bisect())).
+
+prop_bisect() ->
+    ?FORALL(Cmds, commands(?MODULE),
+            ?TRAPEXIT(
+               begin
+                   {ok, S} = start_link(prop, 8, 1),
+
+                   {History,State,Result} = run_commands(?MODULE, Cmds),
+                   stop(S),
+
+                   ?WHENFAIL(io:format("History: ~p\nState: ~p\nResult: ~p\n",
+                                       [History, State, Result]),
+                             aggregate(command_names(Cmds), Result =:= ok))
+                end)).
+
+command(_S) ->
+    [].
+
+initial_state() ->
+    [].
+
+precondition(_, _) ->
+    true.
+
+next_state(S, _, _) ->
+    S.
+
+postcondition(_, _, _) ->
+    true.
+
+-endif.
+
+%%
+%% insert only
+%%
+
+-ifdef(false).
+
+proper_test() ->
+    ?assert(proper:quickcheck(?MODULE:prop_bisect())).
 
 
-insert_test() ->
-    {ok, S} = start_link(8, 1),
-    ok = insert(S, <<1:64/integer>>, <<1>>),
-    ok = insert(S, <<2:64/integer>>, <<2>>),
-    ok = insert(S, <<3:64/integer>>, <<3>>),
+prop_bisect() ->
+    ?FORALL(Cmds, commands(?MODULE),
+            ?TRAPEXIT(
+               begin
+                   {ok, S} = start_link(prop, 8, 1),
 
-    Keys = [<<1:64/integer>>, <<2:64/integer>>, <<3:64/integer>>],
-    Values = [<<1>>, <<2>>, <<3>>],
-    ?assertEqual({ok, Values}, mget(S, Keys)),
-    ?assertEqual({ok, Values}, mget_serial(S, Keys)).
+                   {History,State,Result} = run_commands(?MODULE, Cmds),
+                   stop(S),
+
+                   ?WHENFAIL(io:format("History: ~p\nState: ~p\nResult: ~p\n",
+                                       [History, State, Result]),
+                             aggregate(command_names(Cmds), Result =:= ok))
+                end)).
 
 
-inject_test() ->
-    {ok, S} = start_link(8, 1),
-    KeyPairs = lists:map(fun (I) -> {<<I:64/integer>>, <<255>>} end,
-                         lists:seq(1, 100000)),
 
-    B = bisect:from_orddict(bisect:new(8, 1), KeyPairs),
+prop__key() ->
+    elements(prop__keys()).
 
-    Key = <<20:64/integer>>,
-    ?assertEqual({ok, not_found}, get(S, Key)),
-    ok = inject(S, B),
-    ?assertEqual({ok, <<255>>}, get(S, Key)).
+prop__value() ->
+    elements(prop__values()).
+
+prop__keys() ->
+    [<<1:64/integer>>, <<2:64/integer>>, <<3:64/integer>>].
+
+prop__values() ->
+    [<<1:8/integer>>, <<2:8/integer>>, <<3:8/integer>>].
+
+
+command(_S) ->
+    oneof([{call, ?MODULE, insert, [prop, prop__key(), prop__value()]}]).
+
+
+-record(prop__state, {keys = []}).
+
+
+initial_state() ->
+    #prop__state{keys = []}.
+
+precondition(_, _) ->
+    true.
+
+next_state(S, _, {call, _, insert, [_, Key, Value]}) ->
+    S#prop__state{
+      keys = lists:keystore(Key, 1, S#prop__state.keys, {Key, Value})}.
+
+
+postcondition(_S, _, _) ->
+    true.
+
+-endif.
+
+
+%%
+%% insert and get
+%%
+
+-ifdef(MODULE).
+
+
+proper_test() ->
+    ?assert(proper:quickcheck(?MODULE:prop_bisect())).
+
+prop_bisect() ->
+    ?FORALL(Cmds, commands(?MODULE),
+            ?TRAPEXIT(
+               begin
+                   {ok, S} = start_link(prop, 8, 1),
+
+                   {History,State,Result} = run_commands(?MODULE, Cmds),
+                   stop(S),
+
+                   ?WHENFAIL(io:format("History: ~p\nState: ~p\nResult: ~p\n",
+                                       [History, State, Result]),
+                             aggregate(command_names(Cmds), Result =:= ok))
+                end)).
+
+prop__key() ->
+    elements(prop__keys()).
+
+prop__value() ->
+    elements(prop__values()).
+
+prop__keys() ->
+    [<<1:64/integer>>, <<2:64/integer>>, <<3:64/integer>>].
+
+prop__values() ->
+    [<<1:8/integer>>, <<2:8/integer>>, <<3:8/integer>>].
+
+
+command(_S) ->
+    oneof([{call, ?MODULE, insert, [prop, prop__key(), prop__value()]},
+           {call, ?MODULE, get, [prop, prop__key()]}
+          ]).
+
+-record(prop__state, {keys = []}).
+
+initial_state() ->
+    #prop__state{keys = []}.
+
+precondition(_, _) ->
+    true.
+
+next_state(S, _, {call, _, insert, [_, Key, Value]}) ->
+    S#prop__state{
+      keys = lists:keystore(Key, 1, S#prop__state.keys, {Key, Value})};
+next_state(S, _, _) ->
+    S.
+
+
+
+postcondition(S, {call, _, get, [_, Key]}, {ok, not_found}) ->
+    not lists:keymember(Key, 1, S#prop__state.keys);
+
+postcondition(S, {call, _, get, [_, Key]}, {ok, Value}) ->
+    case lists:keyfind(Key, 1, S#prop__state.keys) of
+        {Key, Value} ->
+            true;
+        _ ->
+            false
+    end;
+postcondition(_, {call, _, insert, _}, _) ->
+    true.
+
+-endif.
+
+
+-ifdef(false).
 
 
 proper_test() ->

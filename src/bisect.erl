@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, insert/3, find/2, delete/2, compact/1]).
+-export([new/2, insert/3, find/2, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -87,6 +87,18 @@ insert(B, K, V) ->
 
         <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
             B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
+    end.
+
+-spec cas(bindict(), key(), value() | 'not_found', value()) -> bindict().
+%% @doc: Check-and-set operation. If 'not_found' is specified as the
+%% old value, the key should not exist in the array. Provided for use
+%% by bisect_server.
+cas(B, K, OldV, V) ->
+    case find(B, K) of
+        OldV ->
+            insert(B, K, V);
+        _OtherV ->
+            error(badarg)
     end.
 
 

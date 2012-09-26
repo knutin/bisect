@@ -7,7 +7,7 @@
 %% API
 -export([start_link/2, start_link/3, stop/1]).
 -export([get/2, mget/2, mget_serial/2,
-         insert/3, inject/2, num_keys/1, delete/2]).
+         insert/3, cas/4, inject/2, num_keys/1, delete/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -53,6 +53,9 @@ num_keys(Pid) ->
 insert(Pid, K, V) ->
     gen_server:call(Pid, {insert, K, V}).
 
+cas(Pid, K, OldV, V) ->
+    gen_server:call(Pid, {cas, K, OldV, V}).
+
 inject(Pid, B) ->
     gen_server:call(Pid, {inject, B}).
 
@@ -81,6 +84,14 @@ handle_call({mget, Keys}, _From, State) ->
 
 handle_call({delete, K}, _From, #state{b = B} = State) ->
     case catch bisect:delete(B, K) of
+        {'EXIT', {badarg, _}} ->
+            {reply, {error, badarg}, State};
+        NewB ->
+            {reply, ok, State#state{b = NewB}}
+    end;
+
+handle_call({cas, K, OldV, V}, _From, #state{b = B} = State) ->
+    case catch bisect:cas(B, K, OldV, V) of
         {'EXIT', {badarg, _}} ->
             {reply, {error, badarg}, State};
         NewB ->
@@ -120,6 +131,20 @@ insert_test() ->
     Values = [<<1>>, <<2>>, <<3>>],
     ?assertEqual({ok, Values}, mget(S, Keys)),
     ?assertEqual({ok, Values}, mget_serial(S, Keys)).
+
+
+cas_test() ->
+    {ok, S} = start_link(8, 1),
+    ok = insert(S, <<1:64/integer>>, <<1>>),
+    {error, badarg} = cas(S, <<2:64/integer>>, <<2>>, <<2>>),
+    ?assertEqual({ok, <<1>>}, get(S, <<1:64/integer>>)),
+
+    ok = cas(S, <<1:64/integer>>, <<1>>, <<2>>),
+    ?assertEqual({ok, <<2>>}, get(S, <<1:64/integer>>)),
+
+    ok = cas(S, <<2:64/integer>>, not_found, <<2>>),
+    ?assertEqual({ok, <<2>>}, get(S, <<2:64/integer>>)).
+
 
 
 inject_test() ->

@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, insert/3, append/2, append/3, find/2, next/2, delete/2, compact/1, cas/4]).
+-export([new/2, new/3, insert/3, append/2, append/3, find/2, next/2, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -61,6 +61,14 @@ new(KeySize, ValueSize) when is_integer(KeySize) andalso is_integer(ValueSize) -
              value_size = ValueSize,
              block_size = KeySize + ValueSize,
              b = <<>>}.
+
+-spec new(key_size(), value_size(), binary()) -> bindict().
+%% @doc: Returns a new dictionary with the given data
+new(KeySize, ValueSize, Data) when is_integer(KeySize) andalso is_integer(ValueSize) andalso is_binary(Data) ->
+    #bindict{key_size = KeySize,
+             value_size = ValueSize,
+             block_size = KeySize + ValueSize,
+             b = Data}.
 
 
 -spec insert(bindict(), key(), value()) -> bindict().
@@ -276,6 +284,10 @@ inc(B) ->
 -define(i2v(I), <<I:8/integer>>).
 -define(b2i(B), list_to_integer(binary_to_list(B))).
 
+new_with_data_test() ->
+    Dict = insert_many(new(8, 1), [{2, 2}, {4, 4}, {1, 1}, {3, 3}]),
+    ?assertEqual(Dict, new(8, 1, Dict#bindict.b)).
+
 insert_test() ->
     insert_many(new(8, 1), [{2, 2}, {4, 4}, {1, 1}, {3, 3}]).
 
@@ -317,7 +329,7 @@ append_test() ->
     B2 = append(B, K2, V2),
     ?assertEqual(V2, find(B2, K2)).
 
-append_test2() ->
+append2_test() ->
     KV1 = {<<2:64>>, <<2:8>>},
     {K2, V2} = {<<3:64>>, <<3:8>>},
     B = insert_many(new(8, 1), [KV1]),

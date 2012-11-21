@@ -409,7 +409,7 @@ insert_many(Bin, Pairs) ->
                         insert(B, K, V)
                 end, Bin, Pairs).
 
--endif.
-
 inc_test() ->
     ?assertEqual(<<7:64>>, inc(<<6:64>>)).
+
+-endif.

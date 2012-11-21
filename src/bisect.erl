@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, insert/3, append/3, find/2, next/2, delete/2, compact/1, cas/4]).
+-export([new/2, insert/3, append/2, append/3, find/2, next/2, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -36,6 +36,7 @@
 
 -type key()        :: binary().
 -type value()      :: binary().
+-type key_value()  :: binary().
 
 -type index()      :: pos_integer().
 
@@ -97,8 +98,15 @@ append(B, K, V) when byte_size(K) =/= B#bindict.key_size orelse
     erlang:error(badarg);
 
 append(B, K, V) ->
+    append(B, <<K/binary, V/binary>>).
+
+-spec append(bindict(), key_value()) -> bindict().
+append(B, KV) when byte_size(KV) =/= B#bindict.key_size + B#bindict.value_size ->
+    erlang:error(badarg);
+
+append(B, KV) ->
     Bin = B#bindict.b,
-    B#bindict{b = <<Bin/binary, K/binary, V/binary>>}.
+    B#bindict{b = <<Bin/binary, KV/binary>>}.
 
 -spec cas(bindict(), key(), value() | 'not_found', value()) -> bindict().
 %% @doc: Check-and-set operation. If 'not_found' is specified as the
@@ -307,6 +315,13 @@ append_test() ->
     {K2, V2} = {<<3:64>>, <<3:8>>},
     B = insert_many(new(8, 1), [KV1]),
     B2 = append(B, K2, V2),
+    ?assertEqual(V2, find(B2, K2)).
+
+append_test2() ->
+    KV1 = {<<2:64>>, <<2:8>>},
+    {K2, V2} = {<<3:64>>, <<3:8>>},
+    B = insert_many(new(8, 1), [KV1]),
+    B2 = append(B, <<K2/binary, V2/binary>>),
     ?assertEqual(V2, find(B2, K2)).
 
 next_test() ->

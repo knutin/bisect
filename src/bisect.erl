@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, new/3, insert/3, append/2, append/3, find/2, next/2, delete/2, compact/1, cas/4]).
+-export([new/2, new/3, insert/3, append/2, append/3, find/2, next/2, first/1, last/1, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 

@@ -174,6 +174,31 @@ next(B, K) ->
             not_found
     end.
 
+-spec first(bindict()) -> {key(), value()} | not_found.
+%% @doc: Returns the first key-value pair or 'not_found' if the dict is empty
+first(B) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    case B#bindict.b of
+        <<Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
+            {Key, Value};
+        _ ->
+            not_found
+    end.
+
+-spec last(bindict()) -> {key(), value()} | not_found.
+%% @doc: Returns the last key-value pair or 'not_found' if the dict is empty
+last(B) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    Offset = byte_size(B#bindict.b) - KeySize - ValueSize,
+    case B#bindict.b of
+        <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary>> ->
+            {Key, Value};
+        _ ->
+            not_found
+    end.
+
 %% @doc: Compacts the internal binary used for storage, by creating a
 %% new copy where all the data is aligned in memory. Writes will cause
 %% fragmentation.
@@ -344,6 +369,26 @@ next_test() ->
     ?assertEqual(KV1, next(B, <<1:64>>)),
     ?assertEqual(KV2, next(B, <<2:64>>)),
     ?assertEqual(not_found, next(B, <<3:64>>)).  
+
+first_test() ->
+    KV1  = {K1, V1} = {<<2:64>>, <<2:8>>},
+    _KV2 = {K2, V2} = {<<3:64>>, <<3:8>>},
+    B1 = new(8, 1),
+    ?assertEqual(not_found, first(B1)),
+    B2 = insert(B1, K1, V1),
+    ?assertEqual(KV1, first(B2)),
+    B3 = insert(B2, K2, V2),
+    ?assertEqual(KV1, first(B3)).
+
+last_test() ->
+    KV1 = {K1, V1} = {<<2:64>>, <<2:8>>},
+    KV2 = {K2, V2} = {<<3:64>>, <<3:8>>},
+    B1 = new(8, 1),
+    ?assertEqual(not_found, last(B1)),
+    B2 = insert(B1, K1, V1),
+    ?assertEqual(KV1, last(B2)),
+    B3 = insert(B2, K2, V2),
+    ?assertEqual(KV2, last(B3)).
 
 delete_test() ->
     B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),

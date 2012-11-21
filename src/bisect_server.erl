@@ -6,7 +6,7 @@
 
 %% API
 -export([start_link/2, start_link/3, stop/1]).
--export([get/2, mget/2, mget_serial/2,
+-export([get/2, next/2, mget/2, mget_serial/2,
          insert/3, cas/4, inject/2, num_keys/1, delete/2]).
 
 %% gen_server callbacks
@@ -38,6 +38,10 @@ stop(Pid) ->
 get(Pid, K) ->
     {ok, B} = gen_server:call(Pid, get_b),
     {ok, bisect:find(B, K)}.
+
+next(Pid, K) ->
+    {ok, B} = gen_server:call(Pid, get_b),
+    {ok, bisect:next(B, K)}.
 
 mget(Pid, Keys) ->
     {ok, B} = gen_server:call(Pid, get_b),

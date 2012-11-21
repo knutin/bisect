@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, insert/3, find/2, delete/2, compact/1, cas/4]).
+-export([new/2, insert/3, find/2, next/2, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -133,6 +133,19 @@ delete(B, K) ->
             erlang:error(badarg)
     end.
 
+-spec next(bindict(), key()) -> value() | not_found.
+%% @doc: Returns the exact same or next larger key and value associated with it or 'not_found' if
+%% no larger key.
+next(B, K) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    Offset = index2offset(B, index(B, inc(K))),
+    case B#bindict.b of
+        <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
+            {Key, Value};
+        _ ->
+            not_found
+    end.
 
 %% @doc: Compacts the internal binary used for storage, by creating a
 %% new copy where all the data is aligned in memory. Writes will cause
@@ -229,6 +242,10 @@ index(B, Low, High, K) ->
             Mid
     end.
 
+inc(B) ->
+    IncInt = binary:decode_unsigned(B) + 1,
+    SizeBits = erlang:size(B) * 8,
+    <<IncInt:SizeBits>>.
 
 %%
 %% TEST
@@ -274,6 +291,14 @@ insert_overwrite_test() ->
     B2 = insert(B, <<2:64/integer>>, <<4>>),
     ?assertEqual(<<4>>, find(B2, <<2:64/integer>>)).
 
+next_test() ->
+    KV1 = {<<2:64>>, <<2:8>>},
+    KV2 = {<<3:64>>, <<3:8>>},
+    B = insert_many(new(8, 1), [KV1, KV2]),
+    ?assertEqual(KV1, next(B, <<0:64>>)),
+    ?assertEqual(KV1, next(B, <<1:64>>)),
+    ?assertEqual(KV2, next(B, <<2:64>>)),
+    ?assertEqual(not_found, next(B, <<3:64>>)).  
 
 delete_test() ->
     B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
@@ -385,3 +410,6 @@ insert_many(Bin, Pairs) ->
                 end, Bin, Pairs).
 
 -endif.
+
+inc_test() ->
+    ?assertEqual(<<7:64>>, inc(<<6:64>>)).

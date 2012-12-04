@@ -161,7 +161,7 @@ delete(B, K) ->
     end.
 
 -spec next(bindict(), key()) -> value() | not_found.
-%% @doc: Returns the exact same or next larger key and value associated with it or 'not_found' if
+%% @doc: Returns the next larger key and value associated with it or 'not_found' if
 %% no larger key.
 next(B, K) ->
     KeySize = B#bindict.key_size,

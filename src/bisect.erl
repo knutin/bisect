@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, new/3, insert/3, append/2, append/3, find/2, next/2, first/1, last/1, delete/2, compact/1, cas/4]).
+-export([new/2, new/3, insert/3, append/2, append/3, find/2, next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -162,17 +162,24 @@ delete(B, K) ->
 
 -spec next(bindict(), key()) -> value() | not_found.
 %% @doc: Returns the next larger key and value associated with it or 'not_found' if
-%% no larger key.
+%% no larger key exists.
 next(B, K) ->
+  next_nth(B, K, 1).
+
+%% @doc: Returns the nth next larger key and value associated with it or 'not_found' if
+%% it does not exist.
+-spec next_nth(bindict(), key(), non_neg_integer()) -> value() | not_found.
+next_nth(B, K, Steps) ->
     KeySize = B#bindict.key_size,
     ValueSize = B#bindict.value_size,
-    Offset = index2offset(B, index(B, inc(K))),
+    Offset = index2offset(B, index(B, inc(K)) + Steps - 1),
     case B#bindict.b of
         <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
             {Key, Value};
         _ ->
             not_found
     end.
+
 
 -spec first(bindict()) -> {key(), value()} | not_found.
 %% @doc: Returns the first key-value pair or 'not_found' if the dict is empty
@@ -369,6 +376,16 @@ next_test() ->
     ?assertEqual(KV1, next(B, <<1:64>>)),
     ?assertEqual(KV2, next(B, <<2:64>>)),
     ?assertEqual(not_found, next(B, <<3:64>>)).  
+
+next_nth_test() ->
+    KV1 = {<<2:64>>, <<2:8>>},
+    KV2 = {<<3:64>>, <<3:8>>},
+    B = insert_many(new(8, 1), [KV1, KV2]),
+    ?assertEqual(KV1, next_nth(B, <<0:64>>, 1)),
+    ?assertEqual(KV2, next_nth(B, <<0:64>>, 2)),
+    ?assertEqual(KV2, next_nth(B, <<2:64>>, 1)),
+    ?assertEqual(not_found, next_nth(B, <<2:64>>, 2)),
+    ?assertEqual(not_found, next_nth(B, <<3:64>>, 1)).  
 
 first_test() ->
     KV1  = {K1, V1} = {<<2:64>>, <<2:8>>},

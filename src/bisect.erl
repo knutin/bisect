@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, new/3, insert/3, append/2, append/3, find/2, next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
+-export([new/2, new/3, insert/3, append/3, find/2, next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -36,7 +36,6 @@
 
 -type key()        :: binary().
 -type value()      :: binary().
--type key_value()  :: binary().
 
 -type index()      :: pos_integer().
 
@@ -106,15 +105,13 @@ append(B, K, V) when byte_size(K) =/= B#bindict.key_size orelse
     erlang:error(badarg);
 
 append(B, K, V) ->
-    append(B, <<K/binary, V/binary>>).
-
--spec append(bindict(), key_value()) -> bindict().
-append(B, KV) when byte_size(KV) =/= B#bindict.key_size + B#bindict.value_size ->
-    erlang:error(badarg);
-
-append(B, KV) ->
-    Bin = B#bindict.b,
-    B#bindict{b = <<Bin/binary, KV/binary>>}.
+    case last(B) of
+        {KLast, _} when K =< KLast ->
+          erlang:error(badarg);
+        _ ->
+          Bin = B#bindict.b,
+          B#bindict{b = <<Bin/binary, K/binary, V/binary>>}
+    end.
 
 -spec cas(bindict(), key(), value() | 'not_found', value()) -> bindict().
 %% @doc: Check-and-set operation. If 'not_found' is specified as the
@@ -358,14 +355,9 @@ append_test() ->
     KV1 = {<<2:64>>, <<2:8>>},
     {K2, V2} = {<<3:64>>, <<3:8>>},
     B = insert_many(new(8, 1), [KV1]),
+    ?assertError(badarg, append(B, <<1:64>>, V2)),
+    ?assertError(badarg, append(B, <<2:64>>, V2)),
     B2 = append(B, K2, V2),
-    ?assertEqual(V2, find(B2, K2)).
-
-append2_test() ->
-    KV1 = {<<2:64>>, <<2:8>>},
-    {K2, V2} = {<<3:64>>, <<3:8>>},
-    B = insert_many(new(8, 1), [KV1]),
-    B2 = append(B, <<K2/binary, V2/binary>>),
     ?assertEqual(V2, find(B2, K2)).
 
 next_test() ->
@@ -507,6 +499,76 @@ time_reads(B, Size, ReadKeys) ->
     receive done -> ok after 1000 -> ok end.
 
 
+time_write_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(N , B) ->
+        insert(B, <<N:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Insert", Fun, new(8, 1), 1000, 20000)
+    end
+  }.
+
+time_write_and_read_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count, B) ->
+        KInt = random:uniform(Count),
+        find(B, <<KInt:64/integer>>),
+        insert(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Insert and find", Fun, new(8, 1), 1000, 10000)
+    end
+  }.
+
+time_appends_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count, B) ->
+        append(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Append", Fun, new(8, 1), 1000, 100000)
+    end
+  }.
+
+time_appends_and_find_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count, B) ->
+        KInt = random:uniform(Count),
+        find(B, <<KInt:64/integer>>),
+        append(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Append and find", Fun, new(8, 1), 1000, 50000)
+    end
+  }.
+
+time_appends_and_next_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count , B) ->
+        KInt = random:uniform(Count),
+        next(B, <<KInt:64/integer>>),
+        append(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Append and next", Fun, new(8, 1), 1000, 50000)
+    end
+  }.
+
+start_time_interval(Operation, Fun, B, MeasureEvery, N) ->
+  Times = time_interval(Fun, B, MeasureEvery, N, 1, now()),
+  error_logger:info_msg("Time (ms) taken for ~p executions of ~p:\n~p\n", [MeasureEvery, Operation, Times]).
+
+time_interval(_, _, _, N, N, _) ->
+  [];
+time_interval(Fun, B, MeasureEvery, N, Count, T) ->
+  B2 = Fun(Count, B),
+  case Count rem MeasureEvery =:= 0 of
+    true ->
+      [timer:now_diff(now(), T)| time_interval(Fun, B2, MeasureEvery, N, Count + 1, now())];
+    false ->
+      time_interval(Fun, B2, MeasureEvery, N, Count + 1, T)
+  end.
 
 
 insert_many(Bin, Pairs) ->

@@ -7,7 +7,7 @@
 %% API
 -export([start_link/2, start_link/3, start_link_with_data/3, stop/1]).
 -export([get/2, first/1, last/1, next/2, next_nth/3, mget/2, mget_serial/2,
-         insert/3, append/2, cas/4, inject/2, num_keys/1, delete/2]).
+         insert/3, append/3, cas/4, inject/2, num_keys/1, delete/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -72,8 +72,8 @@ num_keys(Pid) ->
 insert(Pid, K, V) ->
     gen_server:call(Pid, {insert, K, V}).
 
-append(Pid, KV) ->
-    gen_server:call(Pid, {append, KV}).
+append(Pid, K, V) ->
+    gen_server:call(Pid, {append, K, V}).
 
 cas(Pid, K, OldV, V) ->
     gen_server:call(Pid, {cas, K, OldV, V}).
@@ -100,8 +100,8 @@ handle_call(get_b, _From, State) ->
 handle_call({insert, K, V}, _From, #state{b = B} = State) ->
     {reply, ok, State#state{b = bisect:insert(B, K, V)}};
 
-handle_call({append, KV}, _From, #state{b = B} = State) ->
-    {reply, ok, State#state{b = bisect:append(B, KV)}};
+handle_call({append, K, V}, _From, #state{b = B} = State) ->
+    {reply, ok, State#state{b = bisect:append(B, K, V)}};
 
 handle_call({inject, B}, _From, State) ->
     {reply, ok, State#state{b = B}};

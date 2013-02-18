@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, insert/3, find/2, delete/2, compact/1, cas/4]).
+-export([new/2, new/3, insert/3, append/3, find/2, next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
@@ -61,6 +61,14 @@ new(KeySize, ValueSize) when is_integer(KeySize) andalso is_integer(ValueSize) -
              block_size = KeySize + ValueSize,
              b = <<>>}.
 
+-spec new(key_size(), value_size(), binary()) -> bindict().
+%% @doc: Returns a new dictionary with the given data
+new(KeySize, ValueSize, Data) when is_integer(KeySize) andalso is_integer(ValueSize) andalso is_binary(Data) ->
+    #bindict{key_size = KeySize,
+             value_size = ValueSize,
+             block_size = KeySize + ValueSize,
+             b = Data}.
+
 
 -spec insert(bindict(), key(), value()) -> bindict().
 %% @doc: Inserts the key and value into the dictionary. If the size of
@@ -87,6 +95,22 @@ insert(B, K, V) ->
 
         <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
             B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
+    end.
+
+-spec append(bindict(), key(), value()) -> bindict().
+%% @doc: Append a key and value. This is only useful if the key is known
+%% to be larger than any other key. Otherwise it will corrupt the bindict.
+append(B, K, V) when byte_size(K) =/= B#bindict.key_size orelse
+                     byte_size(V) =/= B#bindict.value_size ->
+    erlang:error(badarg);
+
+append(B, K, V) ->
+    case last(B) of
+        {KLast, _} when K =< KLast ->
+          erlang:error(badarg);
+        _ ->
+          Bin = B#bindict.b,
+          B#bindict{b = <<Bin/binary, K/binary, V/binary>>}
     end.
 
 -spec cas(bindict(), key(), value() | 'not_found', value()) -> bindict().
@@ -133,6 +157,51 @@ delete(B, K) ->
             erlang:error(badarg)
     end.
 
+-spec next(bindict(), key()) -> value() | not_found.
+%% @doc: Returns the next larger key and value associated with it or 'not_found' if
+%% no larger key exists.
+next(B, K) ->
+  next_nth(B, K, 1).
+
+%% @doc: Returns the nth next larger key and value associated with it or 'not_found' if
+%% it does not exist.
+-spec next_nth(bindict(), key(), non_neg_integer()) -> value() | not_found.
+next_nth(B, K, Steps) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    Offset = index2offset(B, index(B, inc(K)) + Steps - 1),
+    case B#bindict.b of
+        <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
+            {Key, Value};
+        _ ->
+            not_found
+    end.
+
+
+-spec first(bindict()) -> {key(), value()} | not_found.
+%% @doc: Returns the first key-value pair or 'not_found' if the dict is empty
+first(B) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    case B#bindict.b of
+        <<Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
+            {Key, Value};
+        _ ->
+            not_found
+    end.
+
+-spec last(bindict()) -> {key(), value()} | not_found.
+%% @doc: Returns the last key-value pair or 'not_found' if the dict is empty
+last(B) ->
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+    Offset = byte_size(B#bindict.b) - KeySize - ValueSize,
+    case B#bindict.b of
+        <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary>> ->
+            {Key, Value};
+        _ ->
+            not_found
+    end.
 
 %% @doc: Compacts the internal binary used for storage, by creating a
 %% new copy where all the data is aligned in memory. Writes will cause
@@ -229,6 +298,10 @@ index(B, Low, High, K) ->
             Mid
     end.
 
+inc(B) ->
+    IncInt = binary:decode_unsigned(B) + 1,
+    SizeBits = erlang:size(B) * 8,
+    <<IncInt:SizeBits>>.
 
 %%
 %% TEST
@@ -239,6 +312,10 @@ index(B, Low, High, K) ->
 -define(i2k(I), <<I:64/integer>>).
 -define(i2v(I), <<I:8/integer>>).
 -define(b2i(B), list_to_integer(binary_to_list(B))).
+
+new_with_data_test() ->
+    Dict = insert_many(new(8, 1), [{2, 2}, {4, 4}, {1, 1}, {3, 3}]),
+    ?assertEqual(Dict, new(8, 1, Dict#bindict.b)).
 
 insert_test() ->
     insert_many(new(8, 1), [{2, 2}, {4, 4}, {1, 1}, {3, 3}]).
@@ -274,6 +351,53 @@ insert_overwrite_test() ->
     B2 = insert(B, <<2:64/integer>>, <<4>>),
     ?assertEqual(<<4>>, find(B2, <<2:64/integer>>)).
 
+append_test() ->
+    KV1 = {<<2:64>>, <<2:8>>},
+    {K2, V2} = {<<3:64>>, <<3:8>>},
+    B = insert_many(new(8, 1), [KV1]),
+    ?assertError(badarg, append(B, <<1:64>>, V2)),
+    ?assertError(badarg, append(B, <<2:64>>, V2)),
+    B2 = append(B, K2, V2),
+    ?assertEqual(V2, find(B2, K2)).
+
+next_test() ->
+    KV1 = {<<2:64>>, <<2:8>>},
+    KV2 = {<<3:64>>, <<3:8>>},
+    B = insert_many(new(8, 1), [KV1, KV2]),
+    ?assertEqual(KV1, next(B, <<0:64>>)),
+    ?assertEqual(KV1, next(B, <<1:64>>)),
+    ?assertEqual(KV2, next(B, <<2:64>>)),
+    ?assertEqual(not_found, next(B, <<3:64>>)).  
+
+next_nth_test() ->
+    KV1 = {<<2:64>>, <<2:8>>},
+    KV2 = {<<3:64>>, <<3:8>>},
+    B = insert_many(new(8, 1), [KV1, KV2]),
+    ?assertEqual(KV1, next_nth(B, <<0:64>>, 1)),
+    ?assertEqual(KV2, next_nth(B, <<0:64>>, 2)),
+    ?assertEqual(KV2, next_nth(B, <<2:64>>, 1)),
+    ?assertEqual(not_found, next_nth(B, <<2:64>>, 2)),
+    ?assertEqual(not_found, next_nth(B, <<3:64>>, 1)).  
+
+first_test() ->
+    KV1  = {K1, V1} = {<<2:64>>, <<2:8>>},
+    _KV2 = {K2, V2} = {<<3:64>>, <<3:8>>},
+    B1 = new(8, 1),
+    ?assertEqual(not_found, first(B1)),
+    B2 = insert(B1, K1, V1),
+    ?assertEqual(KV1, first(B2)),
+    B3 = insert(B2, K2, V2),
+    ?assertEqual(KV1, first(B3)).
+
+last_test() ->
+    KV1 = {K1, V1} = {<<2:64>>, <<2:8>>},
+    KV2 = {K2, V2} = {<<3:64>>, <<3:8>>},
+    B1 = new(8, 1),
+    ?assertEqual(not_found, last(B1)),
+    B2 = insert(B1, K1, V1),
+    ?assertEqual(KV1, last(B2)),
+    B3 = insert(B2, K2, V2),
+    ?assertEqual(KV2, last(B3)).
 
 delete_test() ->
     B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
@@ -375,6 +499,76 @@ time_reads(B, Size, ReadKeys) ->
     receive done -> ok after 1000 -> ok end.
 
 
+time_write_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(N , B) ->
+        insert(B, <<N:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Insert", Fun, new(8, 1), 1000, 20000)
+    end
+  }.
+
+time_write_and_read_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count, B) ->
+        KInt = random:uniform(Count),
+        find(B, <<KInt:64/integer>>),
+        insert(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Insert and find", Fun, new(8, 1), 1000, 10000)
+    end
+  }.
+
+time_appends_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count, B) ->
+        append(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Append", Fun, new(8, 1), 1000, 50000)
+    end
+  }.
+
+time_appends_and_find_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count, B) ->
+        KInt = random:uniform(Count),
+        find(B, <<KInt:64/integer>>),
+        append(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Append and find", Fun, new(8, 1), 1000, 50000)
+    end
+  }.
+
+time_appends_and_next_test_() ->
+  {timeout, 600,
+    fun() ->
+      Fun = fun(Count , B) ->
+        KInt = random:uniform(Count),
+        next(B, <<KInt:64/integer>>),
+        append(B, <<Count:64/integer>>, <<255:8/integer>>)
+      end,
+      start_time_interval("Append and next", Fun, new(8, 1), 1000, 50000)
+    end
+  }.
+
+start_time_interval(Operation, Fun, B, MeasureEvery, N) ->
+  Times = time_interval(Fun, B, MeasureEvery, N, 1, now()),
+  error_logger:info_msg("Time (ms) taken for ~p executions each of ~p:\n~p\n", [MeasureEvery, Operation, Times]).
+
+time_interval(_, _, _, N, N, _) ->
+  [];
+time_interval(Fun, B, MeasureEvery, N, Count, T) ->
+  B2 = Fun(Count, B),
+  case Count rem MeasureEvery =:= 0 of
+    true ->
+      [timer:now_diff(now(), T)| time_interval(Fun, B2, MeasureEvery, N, Count + 1, now())];
+    false ->
+      time_interval(Fun, B2, MeasureEvery, N, Count + 1, T)
+  end.
 
 
 insert_many(Bin, Pairs) ->
@@ -383,5 +577,8 @@ insert_many(Bin, Pairs) ->
                     ({K, V}, B) ->
                         insert(B, K, V)
                 end, Bin, Pairs).
+
+inc_test() ->
+    ?assertEqual(<<7:64>>, inc(<<6:64>>)).
 
 -endif.

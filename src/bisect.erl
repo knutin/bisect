@@ -527,7 +527,7 @@ time_appends_test_() ->
       Fun = fun(Count, B) ->
         append(B, <<Count:64/integer>>, <<255:8/integer>>)
       end,
-      start_time_interval("Append", Fun, new(8, 1), 1000, 100000)
+      start_time_interval("Append", Fun, new(8, 1), 1000, 50000)
     end
   }.
 
@@ -557,7 +557,7 @@ time_appends_and_next_test_() ->
 
 start_time_interval(Operation, Fun, B, MeasureEvery, N) ->
   Times = time_interval(Fun, B, MeasureEvery, N, 1, now()),
-  error_logger:info_msg("Time (ms) taken for ~p executions of ~p:\n~p\n", [MeasureEvery, Operation, Times]).
+  error_logger:info_msg("Time (ms) taken for ~p executions each of ~p:\n~p\n", [MeasureEvery, Operation, Times]).
 
 time_interval(_, _, _, N, N, _) ->
   [];

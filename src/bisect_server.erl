@@ -5,9 +5,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/2, start_link/3, stop/1]).
--export([get/2, mget/2, mget_serial/2,
-         insert/3, cas/4, inject/2, num_keys/1, delete/2]).
+-export([start_link/2, start_link/3, start_link_with_data/3, stop/1]).
+-export([get/2, first/1, last/1, next/2, next_nth/3, mget/2, mget_serial/2,
+         insert/3, append/3, cas/4, inject/2, num_keys/1, delete/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -26,6 +26,9 @@
 %%% API
 %%%===================================================================
 
+start_link_with_data(KeySize, ValueSize, Data) ->
+    gen_server:start_link(?MODULE, [KeySize, ValueSize, Data], []).
+
 start_link(KeySize, ValueSize) ->
     gen_server:start_link(?MODULE, [KeySize, ValueSize], []).
 
@@ -38,6 +41,22 @@ stop(Pid) ->
 get(Pid, K) ->
     {ok, B} = gen_server:call(Pid, get_b),
     {ok, bisect:find(B, K)}.
+
+first(Pid) ->
+    {ok, B} = gen_server:call(Pid, get_b),
+    {ok, bisect:first(B)}.
+
+last(Pid) ->
+    {ok, B} = gen_server:call(Pid, get_b),
+    {ok, bisect:last(B)}.
+
+next(Pid, K) ->
+    {ok, B} = gen_server:call(Pid, get_b),
+    {ok, bisect:next(B, K)}.
+
+next_nth(Pid, K, Steps) ->
+    {ok, B} = gen_server:call(Pid, get_b),
+    {ok, bisect:next_nth(B, K, Steps)}.
 
 mget(Pid, Keys) ->
     {ok, B} = gen_server:call(Pid, get_b),
@@ -53,6 +72,9 @@ num_keys(Pid) ->
 insert(Pid, K, V) ->
     gen_server:call(Pid, {insert, K, V}).
 
+append(Pid, K, V) ->
+    gen_server:call(Pid, {append, K, V}).
+
 cas(Pid, K, OldV, V) ->
     gen_server:call(Pid, {cas, K, OldV, V}).
 
@@ -67,14 +89,19 @@ delete(Pid, K) ->
 %%%===================================================================
 
 init([KeySize, ValueSize]) ->
-    {ok, #state{b = bisect:new(KeySize, ValueSize)}}.
+    {ok, #state{b = bisect:new(KeySize, ValueSize)}};
 
+init([KeySize, ValueSize, Data]) ->
+    {ok, #state{b = bisect:new(KeySize, ValueSize, Data)}}.
 
 handle_call(get_b, _From, State) ->
     {reply, {ok, State#state.b}, State};
 
 handle_call({insert, K, V}, _From, #state{b = B} = State) ->
     {reply, ok, State#state{b = bisect:insert(B, K, V)}};
+
+handle_call({append, K, V}, _From, #state{b = B} = State) ->
+    {reply, ok, State#state{b = bisect:append(B, K, V)}};
 
 handle_call({inject, B}, _From, State) ->
     {reply, ok, State#state{b = B}};

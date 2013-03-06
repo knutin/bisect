@@ -91,10 +91,10 @@ insert(B, K, V) ->
 
     case B#bindict.b of
         <<Left:LeftOffset/binary, K:KeySize/binary, _:ValueSize/binary, Right/binary>> ->
-            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>};
+            B#bindict{b = iolist_to_binary([Left, K, V, Right])};
 
         <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
-            B#bindict{b = <<Left/binary, K/binary, V/binary, Right/binary>>}
+            B#bindict{b = iolist_to_binary([Left, K, V, Right])}
     end.
 
 -spec append(bindict(), key(), value()) -> bindict().

@@ -14,8 +14,9 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, new/3, insert/3, append/3, find/2, next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
--export([serialize/1, deserialize/1, from_orddict/2, find_many/2]).
+-export([new/2, new/3, insert/3, append/3, find/2]).
+-export([next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
+-export([serialize/1, deserialize/1, from_orddict/2, find_many/2, merge/3]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
 
 -compile({no_auto_import, [size/1]}).
@@ -157,7 +158,7 @@ delete(B, K) ->
             erlang:error(badarg)
     end.
 
--spec next(bindict(), key()) -> value() | not_found.
+-spec next(bindict(), key()) -> {key(), value()} | not_found.
 %% @doc: Returns the next larger key and value associated with it or 'not_found' if
 %% no larger key exists.
 next(B, K) ->
@@ -237,6 +238,48 @@ deserialize(Bin) ->
         _ ->
             erlang:error(badarg)
     end.
+
+
+merge(F, Left, Right) ->
+    %% TODO: Assert sizes equals
+
+    L = case {first(Left), first(Right)} of
+            {{LeftK, _}, not_found} ->
+                do_merge(F, LeftK, Left, Right, []);
+            {not_found, {RightK, _}} ->
+                do_merge(F, RightK, Left, Right, []);
+
+            {{LeftK, _}, {RightK, _}} when LeftK < RightK ->
+                do_merge(F, LeftK, Left, Right, []);
+            {{_, _}, {RightK, _}} ->
+                do_merge(F, RightK, Left, Right, [])
+        end,
+    Left#bindict{b = iolist_to_binary(lists:reverse(L))}.
+
+do_merge(F, Key, #bindict{key_size = KeySize, value_size = ValueSize} = Left, Right, Acc) ->
+    NewAcc = case {find(Left, Key), find(Right, Key)} of
+                 {not_found, V} ->
+                     [[Key, V] | Acc];
+                 {V, not_found} ->
+                     [[Key, V] | Acc];
+                 {LeftValue, RightValue} ->
+                     [[Key, F(Key, LeftValue, RightValue)] | Acc]
+             end,
+
+    case {next(Left, Key), next(Right, Key)} of
+        {not_found, not_found} ->
+            NewAcc;
+        {not_found, {RightK, _}} ->
+            do_merge(F, RightK, Left, Right, NewAcc);
+        {{LeftK, _}, not_found} ->
+            do_merge(F, LeftK, Left, Right, NewAcc);
+
+        {{LeftK, _}, {RightK, _}} when LeftK < RightK ->
+            do_merge(F, LeftK, Left, Right, NewAcc);
+        {{LeftK, _}, {_, _}}  ->
+            do_merge(F, LeftK, Left, Right, NewAcc)
+    end.
+
 
 
 %% @doc: Populates the dictionary with data from the orddict, taking
@@ -580,5 +623,22 @@ insert_many(Bin, Pairs) ->
 
 inc_test() ->
     ?assertEqual(<<7:64>>, inc(<<6:64>>)).
+
+merge_test() ->
+    Left  = insert_many(new(1, 1),
+                        [{<<1:8>>, <<1:8>>}, {<<2:8>>, <<2:8>>}, {<<3:8>>, <<3:8>>}]),
+    Right = insert_many(new(1, 1),
+                        [{<<1:8>>, <<0:8>>}, {<<2:8>>, <<3:8>>}, {<<4:8>>, <<4:8>>}]),
+
+    Merged = merge(fun (_Index, LeftV, RightV) ->
+                           max(LeftV, RightV)
+                   end, Left, Right),
+    ?assertEqual(<<1:8>>, find(Merged, <<1:8>>)),
+    ?assertEqual(<<3:8>>, find(Merged, <<2:8>>)),
+    ?assertEqual(<<3:8>>, find(Merged, <<3:8>>)),
+    ?assertEqual(<<4:8>>, find(Merged, <<4:8>>)),
+
+    ok.
+
 
 -endif.

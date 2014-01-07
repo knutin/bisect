@@ -14,7 +14,7 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, new/3, insert/3, append/3, find/2]).
+-export([new/2, new/3, insert/3, append/3, find/2, foldl/3]).
 -export([next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, find_many/2, merge/3]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1]).
@@ -56,15 +56,15 @@
 -spec new(key_size(), value_size()) -> bindict().
 %% @doc: Returns a new empty dictionary where where the keys and
 %% values will always be of the given size.
-new(KeySize, ValueSize) when is_integer(KeySize) andalso is_integer(ValueSize) ->
-    #bindict{key_size = KeySize,
-             value_size = ValueSize,
-             block_size = KeySize + ValueSize,
-             b = <<>>}.
+new(KeySize, ValueSize) when is_integer(KeySize)
+                             andalso is_integer(ValueSize) ->
+    new(KeySize, ValueSize, <<>>).
 
 -spec new(key_size(), value_size(), binary()) -> bindict().
 %% @doc: Returns a new dictionary with the given data
-new(KeySize, ValueSize, Data) when is_integer(KeySize) andalso is_integer(ValueSize) andalso is_binary(Data) ->
+new(KeySize, ValueSize, Data) when is_integer(KeySize)
+                                   andalso is_integer(ValueSize)
+                                   andalso is_binary(Data) ->
     #bindict{key_size = KeySize,
              value_size = ValueSize,
              block_size = KeySize + ValueSize,
@@ -159,13 +159,13 @@ delete(B, K) ->
     end.
 
 -spec next(bindict(), key()) -> {key(), value()} | not_found.
-%% @doc: Returns the next larger key and value associated with it or 'not_found' if
-%% no larger key exists.
+%% @doc: Returns the next larger key and value associated with it or
+%% 'not_found' if no larger key exists.
 next(B, K) ->
   next_nth(B, K, 1).
 
-%% @doc: Returns the nth next larger key and value associated with it or 'not_found' if
-%% it does not exist.
+%% @doc: Returns the nth next larger key and value associated with it
+%% or 'not_found' if it does not exist.
 -spec next_nth(bindict(), key(), non_neg_integer()) -> value() | not_found.
 next_nth(B, K, Steps) ->
     KeySize = B#bindict.key_size,
@@ -203,6 +203,24 @@ last(B) ->
         _ ->
             not_found
     end.
+
+-spec foldl(bindict(), fun(), any()) -> any().
+foldl(B, F, Acc) ->
+    case first(B) of
+        {Key, Value} ->
+            do_foldl(B, F, Key, F(Key, Value, Acc));
+        not_found ->
+            erlang:error(badarg)
+    end.
+
+do_foldl(B, F, PrevKey, Acc) ->
+    case next(B, PrevKey) of
+        {Key, Value} ->
+            do_foldl(B, F, Key, F(Key, Value, Acc));
+        not_found ->
+            Acc
+    end.
+
 
 %% @doc: Compacts the internal binary used for storage, by creating a
 %% new copy where all the data is aligned in memory. Writes will cause
@@ -256,7 +274,8 @@ merge(F, Left, Right) ->
         end,
     Left#bindict{b = iolist_to_binary(lists:reverse(L))}.
 
-do_merge(F, Key, #bindict{key_size = KeySize, value_size = ValueSize} = Left, Right, Acc) ->
+do_merge(F, Key, #bindict{key_size = KeySize, value_size = ValueSize} = Left,
+         Right, Acc) ->
     NewAcc = case {find(Left, Key), find(Right, Key)} of
                  {not_found, V} ->
                      [[Key, V] | Acc];
@@ -288,8 +307,9 @@ do_merge(F, Key, #bindict{key_size = KeySize, value_size = ValueSize} = Left, Ri
 from_orddict(#bindict{b = <<>>} = B, Orddict) ->
     KeySize = B#bindict.key_size,
     ValueSize = B#bindict.value_size,
-    NewB = lists:foldl(fun ({K, V}, Bin) when byte_size(K) =:= B#bindict.key_size andalso
-                                              byte_size(V) =:= B#bindict.value_size ->
+    NewB = lists:foldl(fun ({K, V}, Bin)
+                             when byte_size(K) =:= B#bindict.key_size andalso
+                                  byte_size(V) =:= B#bindict.value_size ->
                                <<Bin/binary, K:KeySize/binary, V:ValueSize/binary>>;
                            (_, _) ->
                                erlang:error(badarg)
@@ -452,6 +472,10 @@ delete_test() ->
 delete_non_existing_test() ->
     B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
     ?assertError(badarg, delete(B, ?i2k(4))).
+
+foldl_test() ->
+    B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
+    ?assertEqual(2+3+1, foldl(B, fun (_, <<V:8/integer>>, Acc) -> V + Acc end, 0)).
 
 
 size_test() ->

@@ -259,7 +259,8 @@ deserialize(Bin) ->
 
 
 merge(F, Left, Right) ->
-    %% TODO: Assert sizes equals
+    Left#bindict.block_size =:= Right#bindict.block_size
+        orelse erlang:error(badarg),
 
     L = case {first(Left), first(Right)} of
             {{LeftK, _}, not_found} ->
@@ -272,6 +273,7 @@ merge(F, Left, Right) ->
             {{_, _}, {RightK, _}} ->
                 do_merge(F, RightK, Left, Right, [])
         end,
+
     Left#bindict{b = iolist_to_binary(lists:reverse(L))}.
 
 do_merge(F, Key, Left, Right, Acc) ->
@@ -292,8 +294,8 @@ do_merge(F, Key, Left, Right, Acc) ->
         {{LeftK, _}, not_found} ->
             do_merge(F, LeftK, Left, Right, NewAcc);
 
-        {{LeftK, _}, {RightK, _}} when LeftK < RightK ->
-            do_merge(F, LeftK, Left, Right, NewAcc);
+        {{LeftK, _}, {RightK, _}} when LeftK > RightK ->
+            do_merge(F, RightK, Left, Right, NewAcc);
         {{LeftK, _}, {_, _}}  ->
             do_merge(F, LeftK, Left, Right, NewAcc)
     end.
@@ -314,6 +316,12 @@ from_orddict(#bindict{b = <<>>} = B, Orddict) ->
                                erlang:error(badarg)
                        end, B#bindict.b, orddict:to_list(Orddict)),
     B#bindict{b = NewB}.
+
+to_orddict(#bindict{} = B) ->
+    lists:reverse(
+      foldl(B, fun (Key, Value, Acc) ->
+                       [{Key, Value} | Acc]
+               end, [])).
 
 
 %%
@@ -429,7 +437,7 @@ next_test() ->
     ?assertEqual(KV1, next(B, <<0:64>>)),
     ?assertEqual(KV1, next(B, <<1:64>>)),
     ?assertEqual(KV2, next(B, <<2:64>>)),
-    ?assertEqual(not_found, next(B, <<3:64>>)).  
+    ?assertEqual(not_found, next(B, <<3:64>>)).
 
 next_nth_test() ->
     KV1 = {<<2:64>>, <<2:8>>},
@@ -439,7 +447,7 @@ next_nth_test() ->
     ?assertEqual(KV2, next_nth(B, <<0:64>>, 2)),
     ?assertEqual(KV2, next_nth(B, <<2:64>>, 1)),
     ?assertEqual(not_found, next_nth(B, <<2:64>>, 2)),
-    ?assertEqual(not_found, next_nth(B, <<3:64>>, 1)).  
+    ?assertEqual(not_found, next_nth(B, <<3:64>>, 1)).
 
 first_test() ->
     KV1  = {K1, V1} = {<<2:64>>, <<2:8>>},
@@ -649,20 +657,19 @@ inc_test() ->
     ?assertEqual(<<7:64>>, inc(<<6:64>>)).
 
 merge_test() ->
-    Left  = insert_many(new(1, 1),
-                        [{<<1:8>>, <<1:8>>}, {<<2:8>>, <<2:8>>}, {<<3:8>>, <<3:8>>}]),
-    Right = insert_many(new(1, 1),
-                        [{<<1:8>>, <<0:8>>}, {<<2:8>>, <<3:8>>}, {<<4:8>>, <<4:8>>}]),
+    Left = insert_many(new(8, 1), [{1, 1}, {10, 10}, {25, 25}]),
+    Right = insert_many(new(8, 1), [{3, 3}, {12, 12}, {25, 26}, {30, 30}]),
+
 
     Merged = merge(fun (_Index, LeftV, RightV) ->
                            max(LeftV, RightV)
                    end, Left, Right),
-    ?assertEqual(<<1:8>>, find(Merged, <<1:8>>)),
-    ?assertEqual(<<3:8>>, find(Merged, <<2:8>>)),
-    ?assertEqual(<<3:8>>, find(Merged, <<3:8>>)),
-    ?assertEqual(<<4:8>>, find(Merged, <<4:8>>)),
-    ?assertEqual(4, num_keys(Merged)),
 
+    ?assertEqual(?i2v(1), find(Merged, ?i2k(1))),
+    ?assertEqual(?i2v(3), find(Merged, ?i2k(3))),
+    ?assertEqual(?i2v(10), find(Merged, ?i2k(10))),
+    ?assertEqual(?i2v(12), find(Merged, ?i2k(12))),
+    ?assertEqual(?i2v(30), find(Merged, ?i2k(30))),
     ok.
 
 

@@ -16,8 +16,8 @@
 
 -export([new/2, new/3, insert/3, append/3, find/2, foldl/3]).
 -export([next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
--export([serialize/1, deserialize/1, from_orddict/2, find_many/2, merge/3]).
--export([expected_size/2, expected_size_mb/2, num_keys/1]).
+-export([serialize/1, deserialize/1, from_orddict/2, to_orddict/1, find_many/2, merge/3]).
+-export([expected_size/2, expected_size_mb/2, num_keys/1, size/1]).
 
 -compile({no_auto_import, [size/1]}).
 -compile(native).
@@ -240,6 +240,9 @@ expected_size_mb(B, NumKeys) ->
 %% @doc: Returns the number of keys in the dictionary
 num_keys(B) ->
     byte_size(B#bindict.b) div B#bindict.block_size.
+
+size(#bindict{b = B}) ->
+    erlang:byte_size(B).
 
 
 -spec serialize(bindict()) -> binary().

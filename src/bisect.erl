@@ -210,7 +210,7 @@ foldl(B, F, Acc) ->
         {Key, Value} ->
             do_foldl(B, F, Key, F(Key, Value, Acc));
         not_found ->
-            erlang:error(badarg)
+            []
     end.
 
 do_foldl(B, F, PrevKey, Acc) ->
@@ -274,8 +274,7 @@ merge(F, Left, Right) ->
         end,
     Left#bindict{b = iolist_to_binary(lists:reverse(L))}.
 
-do_merge(F, Key, #bindict{key_size = KeySize, value_size = ValueSize} = Left,
-         Right, Acc) ->
+do_merge(F, Key, Left, Right, Acc) ->
     NewAcc = case {find(Left, Key), find(Right, Key)} of
                  {not_found, V} ->
                      [[Key, V] | Acc];
@@ -475,7 +474,8 @@ delete_non_existing_test() ->
 
 foldl_test() ->
     B = insert_many(new(8, 1), [{2, 2}, {3, 3}, {1, 1}]),
-    ?assertEqual(2+3+1, foldl(B, fun (_, <<V:8/integer>>, Acc) -> V + Acc end, 0)).
+    ?assertEqual(2+3+1, foldl(B, fun (_, <<V:8/integer>>, Acc) -> V + Acc end, 0)),
+    ?assertEqual([], foldl(new(8, 1), fun (I, V, Acc) -> [{I, V} | Acc] end, [])).
 
 
 size_test() ->
@@ -661,6 +661,7 @@ merge_test() ->
     ?assertEqual(<<3:8>>, find(Merged, <<2:8>>)),
     ?assertEqual(<<3:8>>, find(Merged, <<3:8>>)),
     ?assertEqual(<<4:8>>, find(Merged, <<4:8>>)),
+    ?assertEqual(4, num_keys(Merged)),
 
     ok.
 

@@ -14,9 +14,9 @@
 -module(bisect).
 -author('Knut Nesheim <knutin@gmail.com>').
 
--export([new/2, new/3, insert/3, append/3, find/2, foldl/3]).
+-export([new/2, new/3, insert/3, bulk_insert/2, append/3, find/2, foldl/3]).
 -export([next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
--export([serialize/1, deserialize/1, from_orddict/2, to_orddict/1, find_many/2, merge/3]).
+-export([serialize/1, deserialize/1, from_orddict/2, to_orddict/1, find_many/2, merge/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1, size/1]).
 
 -compile({no_auto_import, [size/1]}).
@@ -260,50 +260,60 @@ deserialize(Bin) ->
             erlang:error(badarg)
     end.
 
+%% @doc: Insert a batch of key-value pairs into the dictionary. A new
+%% binary is only created once, making it much cheaper than individual
+%% calls to insert/2. The input list must be sorted.
+bulk_insert(#bindict{} = B, Orddict) ->
+    L = do_bulk_insert(B, B#bindict.b, [], Orddict),
 
-merge(F, Left, Right) ->
-    Left#bindict.block_size =:= Right#bindict.block_size
-        orelse erlang:error(badarg),
+    B#bindict{b = iolist_to_binary(lists:reverse(L))}.
 
-    L = case {first(Left), first(Right)} of
-            {{LeftK, _}, not_found} ->
-                do_merge(F, LeftK, Left, Right, []);
-            {not_found, {RightK, _}} ->
-                do_merge(F, RightK, Left, Right, []);
+do_bulk_insert(_B, _Bin, Acc, []) ->
+    Acc;
 
-            {{LeftK, _}, {RightK, _}} when LeftK < RightK ->
-                do_merge(F, LeftK, Left, Right, []);
-            {{_, _}, {RightK, _}} ->
-                do_merge(F, RightK, Left, Right, [])
-        end,
+do_bulk_insert(B, Bin, Acc, [{Key, Value} | Rest]) ->
+    {Left, Right} = split_at(Bin, B#bindict.key_size, B#bindict.value_size, Key, 0),
+    do_bulk_insert(B, Right, [Value, Key, Left | Acc], Rest).
 
-    Left#bindict{b = iolist_to_binary(lists:reverse(L))}.
+split_at(Bin, KeySize, ValueSize, Key, I) ->
+    LeftOffset = I * (KeySize + ValueSize),
+    case Bin of
+        Bin when byte_size(Bin) < LeftOffset ->
+            {Bin, <<>>};
 
-do_merge(F, Key, Left, Right, Acc) ->
-    NewAcc = case {find(Left, Key), find(Right, Key)} of
-                 {not_found, V} ->
-                     [[Key, V] | Acc];
-                 {V, not_found} ->
-                     [[Key, V] | Acc];
-                 {LeftValue, RightValue} ->
-                     [[Key, F(Key, LeftValue, RightValue)] | Acc]
-             end,
+        <<Left:LeftOffset/binary,
+          Key:KeySize/binary, _:ValueSize/binary,
+          Right/binary>> ->
+            {Left, Right};
 
-    case {next(Left, Key), next(Right, Key)} of
-        {not_found, not_found} ->
-            NewAcc;
-        {not_found, {RightK, _}} ->
-            do_merge(F, RightK, Left, Right, NewAcc);
-        {{LeftK, _}, not_found} ->
-            do_merge(F, LeftK, Left, Right, NewAcc);
-
-        {{LeftK, _}, {RightK, _}} when LeftK > RightK ->
-            do_merge(F, RightK, Left, Right, NewAcc);
-        {{LeftK, _}, {_, _}}  ->
-            do_merge(F, LeftK, Left, Right, NewAcc)
+        <<Left:LeftOffset/binary,
+          OtherKey:KeySize/binary, Value:ValueSize/binary,
+          Right/binary>> when OtherKey > Key ->
+            NewRight = <<OtherKey/binary, Value/binary, Right/binary>>,
+            {Left, NewRight};
+        _ ->
+            split_at(Bin, KeySize, ValueSize, Key, I+1)
     end.
 
+merge(Small, Big) ->
+    Small#bindict.block_size =:= Big#bindict.block_size
+        orelse erlang:error(badarg),
 
+    L = do_merge(Small#bindict.b, Big#bindict.b, [],
+                 Big#bindict.key_size, Big#bindict.value_size),
+    Big#bindict{b = iolist_to_binary(L)}.
+
+
+
+do_merge(Small, Big, Acc, KeySize, ValueSize) ->
+    case Small of
+        <<Key:KeySize/binary, Value:ValueSize/binary, RestSmall/binary>> ->
+            {LeftBig, RightBig} = split_at(Big, KeySize, ValueSize, Key, 0),
+            do_merge(RestSmall, RightBig, [Value, Key, LeftBig | Acc],
+                     KeySize, ValueSize);
+        <<>> ->
+            lists:reverse([Big | Acc])
+    end.
 
 %% @doc: Populates the dictionary with data from the orddict, taking
 %% advantage of the fact that it is already ordered. The given bindict
@@ -635,7 +645,8 @@ time_appends_and_next_test_() ->
 
 start_time_interval(Operation, Fun, B, MeasureEvery, N) ->
   Times = time_interval(Fun, B, MeasureEvery, N, 1, now()),
-  error_logger:info_msg("Time (ms) taken for ~p executions each of ~p:\n~p\n", [MeasureEvery, Operation, Times]).
+  error_logger:info_msg("Time (ms) taken for ~p executions each of ~p:\n~p\n",
+                        [MeasureEvery, Operation, Times]).
 
 time_interval(_, _, _, N, N, _) ->
   [];
@@ -659,21 +670,33 @@ insert_many(Bin, Pairs) ->
 inc_test() ->
     ?assertEqual(<<7:64>>, inc(<<6:64>>)).
 
-merge_test() ->
-    Left = insert_many(new(8, 1), [{1, 1}, {10, 10}, {25, 25}]),
-    Right = insert_many(new(8, 1), [{3, 3}, {12, 12}, {25, 26}, {30, 30}]),
 
+bulk_insert_test() ->
+    B = insert_many(new(8, 1), [{1, 1}, {10, 10}]),
+    New = bulk_insert(B, [{?i2k(0), ?i2v(0)},
+                          {?i2k(5), ?i2v(5)},
+                          {?i2k(10), ?i2v(11)},
+                          {?i2k(11), ?i2v(11)}]),
 
-    Merged = merge(fun (_Index, LeftV, RightV) ->
-                           max(LeftV, RightV)
-                   end, Left, Right),
+    ?assertEqual([{?i2k(0) , ?i2v(0)},
+                  {?i2k(1) , ?i2v(1)},
+                  {?i2k(5) , ?i2v(5)},
+                  {?i2k(10), ?i2v(11)},
+                  {?i2k(11), ?i2v(11)}],
+                 to_orddict(New)).
 
-    ?assertEqual(?i2v(1), find(Merged, ?i2k(1))),
-    ?assertEqual(?i2v(3), find(Merged, ?i2k(3))),
-    ?assertEqual(?i2v(10), find(Merged, ?i2k(10))),
-    ?assertEqual(?i2v(12), find(Merged, ?i2k(12))),
-    ?assertEqual(?i2v(30), find(Merged, ?i2k(30))),
-    ok.
+smart_merge_test() ->
+    Big   = insert_many(new(8, 1), [{1, 1}, {10, 10}, {25, 25}]),
+    Small = insert_many(new(8, 1), [{0, 0}, {10, 11}, {12, 12}]),
+
+    Merged = merge(Small, Big),
+
+    ?assertEqual([{?i2k(0) , ?i2v(0)},
+                  {?i2k(1) , ?i2v(1)},
+                  {?i2k(10) , ?i2v(11)},
+                  {?i2k(12), ?i2v(12)},
+                  {?i2k(25), ?i2v(25)}],
+                 to_orddict(Merged)).
 
 
 -endif.

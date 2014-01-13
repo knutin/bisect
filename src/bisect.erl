@@ -15,7 +15,7 @@
 -author('Knut Nesheim <knutin@gmail.com>').
 
 -export([new/2, new/3, insert/3, bulk_insert/2, append/3, find/2, foldl/3]).
--export([next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4]).
+-export([next/2, next_nth/3, first/1, last/1, delete/2, compact/1, cas/4, update/4]).
 -export([serialize/1, deserialize/1, from_orddict/2, to_orddict/1, find_many/2, merge/2]).
 -export([expected_size/2, expected_size_mb/2, num_keys/1, size/1]).
 
@@ -96,6 +96,34 @@ insert(B, K, V) ->
 
         <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
             B#bindict{b = iolist_to_binary([Left, K, V, Right])}
+    end.
+
+%% @doc: Update the value stored under the key by calling F on the old
+%% value to get a new value. If the key is not present, initial will
+%% be stored as the first value. Same as dict:update/4. Note: find and
+%% insert requires two binary searches in the binary, while update
+%% only needs one. It's as close to in-place update we can get in pure
+%% Erlang.
+update(B, K, Initial, _) when byte_size(K) =/= B#bindict.key_size orelse
+                              byte_size(Initial) =/= B#bindict.value_size ->
+    erlang:error(badarg);
+
+update(B, K, Initial, F) ->
+    Index = index(B, K),
+    LeftOffset = Index * B#bindict.block_size,
+    RightOffset = byte_size(B#bindict.b) - LeftOffset,
+
+    KeySize = B#bindict.key_size,
+    ValueSize = B#bindict.value_size,
+
+    case B#bindict.b of
+        <<Left:LeftOffset/binary, K:KeySize/binary, OldV:ValueSize/binary, Right/binary>> ->
+            NewV = F(OldV),
+            byte_size(NewV) =:= ValueSize orelse erlang:error(badarg),
+            B#bindict{b = iolist_to_binary([Left, K, NewV, Right])};
+
+        <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
+            B#bindict{b = iolist_to_binary([Left, K, Initial, Right])}
     end.
 
 -spec append(bindict(), key(), value()) -> bindict().
@@ -431,6 +459,18 @@ insert_overwrite_test() ->
     ?assertEqual(<<2>>, find(B, <<2:64/integer>>)),
     B2 = insert(B, <<2:64/integer>>, <<4>>),
     ?assertEqual(<<4>>, find(B2, <<2:64/integer>>)).
+
+update_test() ->
+    B = insert_many(new(8, 1), [{2, 2}]),
+    B2 = update(B, <<2:64/integer>>, <<4>>, fun (Old) ->
+                                                    ?assertEqual(Old, <<2>>),
+                                                    <<5>>
+                                            end),
+    ?assertEqual(<<5>>, find(B2, <<2:64/integer>>)),
+    B3 = update(B2, <<3:64/integer>>, <<3>>, fun (_) ->
+                                                     throw(unexpected_call)
+                                             end),
+    ?assertEqual(<<3>>, find(B3, <<3:64/integer>>)).
 
 append_test() ->
     KV1 = {<<2:64>>, <<2:8>>},

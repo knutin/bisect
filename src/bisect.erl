@@ -265,12 +265,10 @@ deserialize(Bin) ->
 %% calls to insert/2. The input list must be sorted.
 bulk_insert(#bindict{} = B, Orddict) ->
     L = do_bulk_insert(B, B#bindict.b, [], Orddict),
-
     B#bindict{b = iolist_to_binary(lists:reverse(L))}.
 
-do_bulk_insert(_B, _Bin, Acc, []) ->
-    Acc;
-
+do_bulk_insert(_B, Bin, Acc, []) ->
+    [Bin | Acc];
 do_bulk_insert(B, Bin, Acc, [{Key, Value} | Rest]) ->
     {Left, Right} = split_at(Bin, B#bindict.key_size, B#bindict.value_size, Key, 0),
     do_bulk_insert(B, Right, [Value, Key, Left | Acc], Rest).
@@ -672,7 +670,7 @@ inc_test() ->
 
 
 bulk_insert_test() ->
-    B = insert_many(new(8, 1), [{1, 1}, {10, 10}]),
+    B = insert_many(new(8, 1), [{1, 1}, {10, 10}, {12, 12}]),
     New = bulk_insert(B, [{?i2k(0), ?i2v(0)},
                           {?i2k(5), ?i2v(5)},
                           {?i2k(10), ?i2v(11)},
@@ -682,7 +680,8 @@ bulk_insert_test() ->
                   {?i2k(1) , ?i2v(1)},
                   {?i2k(5) , ?i2v(5)},
                   {?i2k(10), ?i2v(11)},
-                  {?i2k(11), ?i2v(11)}],
+                  {?i2k(11), ?i2v(11)},
+                  {?i2k(12), ?i2v(12)}],
                  to_orddict(New)).
 
 smart_merge_test() ->

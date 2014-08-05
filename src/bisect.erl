@@ -104,8 +104,9 @@ insert(B, K, V) ->
 %% insert requires two binary searches in the binary, while update
 %% only needs one. It's as close to in-place update we can get in pure
 %% Erlang.
-update(B, K, Initial, _) when byte_size(K) =/= B#bindict.key_size orelse
-                              byte_size(Initial) =/= B#bindict.value_size ->
+update(B, K, Initial, F) when byte_size(K) =/= B#bindict.key_size orelse
+                              byte_size(Initial) =/= B#bindict.value_size orelse
+                              not is_function(F) ->
     erlang:error(badarg);
 
 update(B, K, Initial, F) ->
@@ -118,9 +119,13 @@ update(B, K, Initial, F) ->
 
     case B#bindict.b of
         <<Left:LeftOffset/binary, K:KeySize/binary, OldV:ValueSize/binary, Right/binary>> ->
-            NewV = F(OldV),
-            byte_size(NewV) =:= ValueSize orelse erlang:error(badarg),
-            B#bindict{b = iolist_to_binary([Left, K, NewV, Right])};
+            case F(OldV) of
+                OldV ->
+                    B;
+                NewV ->
+                    byte_size(NewV) =:= ValueSize orelse erlang:error(badarg),
+                    B#bindict{b = iolist_to_binary([Left, K, NewV, Right])}
+            end;
 
         <<Left:LeftOffset/binary, Right:RightOffset/binary>> ->
             B#bindict{b = iolist_to_binary([Left, K, Initial, Right])}

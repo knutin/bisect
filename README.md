@@ -1,38 +1,64 @@
-## Space-efficient dictionary
+# Bisect
 
-Recently at work I wrote a service to store some hundred million keys
-in memory for fast lookups of multiple keys. The key is a 15 byte
-string and the value is a binary where each bit is a flag.
+Bisect is a dictionary-like data structure with some very nice properties:
 
-Initially, I choose Redis for this task as it has the `MGET` command
-which you can use to fetch multiple keys in a single roundtrip. As a
-memory optimization, I can store the keys in a Redis hash and use a
-pipelined request to fetch multiple keys. Redis stores 1 million keys
-in 100 MB.
+ * Fixed-size key and values, no storage overhead
+ * Ordered, allows fast in-order traversal, merging and intersections
+ * Stored in an Erlang binary, making parallel no-copy reads possible,
+   easy storage
+ * O(log n) reads
 
-However, I was curious to see if I could improve on this setup. For
-now the system will answer around 1000 concurrent requests, where each
-request will look up 200 keys on average and 1000 keys in the worst
-case. The cache will be updated a few hundred times per second. A
-shared memory architecture would be the perfect tool for this task,
-but I wanted to see how far I could push Erlang.
+These properties makes Bisect a good fit for read-heavy
+workloads. Updates to the dictionary are expensive. On commodity
+multi-core machines it's possible to achieve millions of reads per
+second also with more than 100M keys.
 
-At first I tried using ETS, but some quick math showed that it would
-not be feasible as the memory usage was too high (6 words + size of
-data). Then I tried a trie implemented in pure Erlang, to spread out
-the cost of storing the keys across all entries, however the memory
-overhead of the Erlang tuples was too high to make even this approach
-feasible.
+`bisect_server` is a gen_server wrapping a instance of Bisect for
+parallel no-copy reads.
 
-In `src/bisect.erl` is an implementation of a key-value dictionary
-using a large binary for storage. The key and value are fixed size
-binaries so the binary behaves very much like an array. There is no
-memory overhead per entry. Access is O(log n).
+The API is a bit crap as it started out as a quick experiment and then
+people started using it, making it difficult to warrant fixing the
+API.
 
-As large binaries are shared between processes, there can be multiple
-concurrent readers, which fits the use case very well.
+## Usage
 
-In `bisect:speed_test/0` is a micro-benchmark of sequential reads. By
-adjusting `N` to a number that makes sense for your use case, you can
-get an idea of the read performance.
+When creating a new Bisect you need to decide up front on the key and
+value size. This is great for storing many things of the same type,
+but not so good for different types. Let's say I want to use a single
+byte for both value and key, allowing me 256 unique keys.
 
+```erlang
+1> bisect:new(1, 1).
+{bindict,1,1,2,<<>>}
+
+%% Insert the byte 104 with value 10
+2> bisect:insert(bisect:new(1, 1), <<104>>, <<10>>).
+{bindict,1,1,2,<<"h\n">>}
+
+3> bisect:find(v(-1), <<104>>).
+<<"\n">>
+
+%% If the input parameters have the wrong size, insertion fails
+4> catch bisect:insert(bisect:new(1, 1), <<104, 101>>, <<10>>).
+{'EXIT',{badarg,[{bisect,insert,3,[]},{lists,sort,2,[]}]}}
+
+%% Serialization
+5> bisect:serialize(bisect:insert(bisect:new(1, 1), <<104>>, <<10>>)).
+<<131,104,5,100,0,7,98,105,110,100,105,99,116,97,1,97,1,
+  97,2,109,0,0,0,2,104,10>>
+6> bisect:deserialize(v(-1)).
+{bindict,1,1,2,<<"h\n">>}
+
+%% Bulk insert, much more efficient than one insert at a time
+7> bisect:bulk_insert(bisect:new(1, 1), [{<<104>>, <<10>>}, {<<101>>, <<10>>}]).
+{bindict,1,1,2,<<"h\ne\n">>}
+
+%% Curious how big memory you will use?
+8> bisect:expected_size(bisect:new(1, 1), 255).
+510
+9> bisect:expected_size_mb(bisect:new(8, 1), 10000000).
+85.8306884765625
+```
+
+It is up to the user to encode/decode keys and values in a way that
+makes sense, Bisect only stores the raw bytes you give as input.

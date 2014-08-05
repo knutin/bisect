@@ -176,7 +176,7 @@ cas_test() ->
 
 inject_test() ->
     {ok, S} = start_link(8, 1),
-    KeyPairs = lists:map(fun (I) -> {<<I:64/integer>>, <<255>>} end,
+    KeyPairs = lists:map(fun (I) -> {<<I:64/integer>>, <<97>>} end,
                          lists:seq(1, 100000)),
 
     B = bisect:from_orddict(bisect:new(8, 1), KeyPairs),
@@ -184,7 +184,7 @@ inject_test() ->
     Key = <<20:64/integer>>,
     ?assertEqual({ok, not_found}, get(S, Key)),
     ok = inject(S, B),
-    ?assertEqual({ok, <<255>>}, get(S, Key)).
+    ?assertEqual({ok, <<97>>}, get(S, Key)).
 
 
 proper_test() ->

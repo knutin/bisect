@@ -165,14 +165,10 @@ cas(B, K, OldV, V) ->
 %% @doc: Returns the value associated with the key or 'not_found' if
 %% there is no such key.
 find(B, K) ->
-    Offset = index2offset(B, index(B, K)),
-    KeySize = B#bindict.key_size,
-    ValueSize = B#bindict.value_size,
-    case B#bindict.b of
-        <<_:Offset/binary, K:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
-            Value;
-        _ ->
-            not_found
+    case at(B, index(B, K)) of
+        {K, Value}   -> Value;
+        {_OtherK, _} -> not_found;
+        not_found    -> not_found
     end.
 
 -spec find_many(bindict(), [key()]) -> [value() | not_found].
@@ -202,41 +198,19 @@ next(B, K) ->
 %% or 'not_found' if it does not exist.
 -spec next_nth(bindict(), key(), non_neg_integer()) -> value() | not_found.
 next_nth(B, K, Steps) ->
-    KeySize = B#bindict.key_size,
-    ValueSize = B#bindict.value_size,
-    Offset = index2offset(B, index(B, inc(K)) + Steps - 1),
-    case B#bindict.b of
-        <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
-            {Key, Value};
-        _ ->
-            not_found
-    end.
+    at(B, index(B, inc(K)) + Steps - 1).
+
 
 
 -spec first(bindict()) -> {key(), value()} | not_found.
 %% @doc: Returns the first key-value pair or 'not_found' if the dict is empty
 first(B) ->
-    KeySize = B#bindict.key_size,
-    ValueSize = B#bindict.value_size,
-    case B#bindict.b of
-        <<Key:KeySize/binary, Value:ValueSize/binary, _/binary>> ->
-            {Key, Value};
-        _ ->
-            not_found
-    end.
+    at(B, 0).
 
 -spec last(bindict()) -> {key(), value()} | not_found.
 %% @doc: Returns the last key-value pair or 'not_found' if the dict is empty
 last(B) ->
-    KeySize = B#bindict.key_size,
-    ValueSize = B#bindict.value_size,
-    Offset = byte_size(B#bindict.b) - KeySize - ValueSize,
-    case B#bindict.b of
-        <<_:Offset/binary, Key:KeySize/binary, Value:ValueSize/binary>> ->
-            {Key, Value};
-        _ ->
-            not_found
-    end.
+    at(B, num_keys(B) - 1).
 
 -spec foldl(bindict(), fun(), any()) -> any().
 foldl(B, F, Acc) ->
@@ -334,8 +308,6 @@ merge(Small, Big) ->
     L = do_merge(Small#bindict.b, Big#bindict.b, [],
                  Big#bindict.key_size, Big#bindict.value_size),
     Big#bindict{b = iolist_to_binary(L)}.
-
-
 
 do_merge(Small, Big, Acc, KeySize, ValueSize) ->
     case Small of

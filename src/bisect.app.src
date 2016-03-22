@@ -7,6 +7,5 @@
                   kernel,
                   stdlib
                  ]},
-  {mod, { bisect_app, []}},
   {env, []}
  ]}.
